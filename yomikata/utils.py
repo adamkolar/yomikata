@@ -9,6 +9,7 @@ import unicodedata
 import numpy as np
 import pynvml
 from speach.ttlig import RubyFrag, RubyToken
+from typing import Tuple, List, Dict
 
 """
 Loading and Saving Utilities
@@ -102,17 +103,17 @@ def print_gpu_utilization(gpu_index: int) -> None:
 ML Utilities
 """
 
-
 class LabelEncoder(object):
     """Label encoder for tag labels.
 
     MIT License
     Copyright (c) 2020 Made With ML"""
 
-    def __init__(self, class_to_index={}):
+    def __init__(self, class_to_index={}, group_boundaries={}):
         self.class_to_index = class_to_index or {}  # mutable defaults ;)
         self.index_to_class = {v: k for k, v in self.class_to_index.items()}
         self.classes = list(self.class_to_index.keys())
+        self.group_boundaries = group_boundaries or {}
 
     def __len__(self):
         return len(self.class_to_index)
@@ -120,10 +121,14 @@ class LabelEncoder(object):
     def __str__(self):
         return f"<LabelEncoder(num_classes={len(self)})>"
 
-    def fit(self, y):
-        classes = np.unique(y)
-        for i, class_ in enumerate(classes):
-            self.class_to_index[class_] = i
+    def fit(self, groups):
+        idx = 0
+        for group in groups:
+            start_idx = idx
+            for cl in groups[group]:
+                self.class_to_index[f"{group}:{cl}"] = idx
+                idx += 1
+            self.group_boundaries[group] = (start_idx, idx)
         self.index_to_class = {v: k for k, v in self.class_to_index.items()}
         self.classes = list(self.class_to_index.keys())
         return self
@@ -137,12 +142,12 @@ class LabelEncoder(object):
     def decode(self, y):
         classes = []
         for i, item in enumerate(y):
-            classes.append(self.index_to_class[item])
+            classes.append(self.index_to_class[item] if item != -100 else "NaN")
         return classes
 
     def save(self, fp):
         with open(fp, "w") as fp:
-            contents = {"class_to_index": self.class_to_index}
+            contents = {"class_to_index": self.class_to_index, "group_boundaries": self.group_boundaries}
             json.dump(contents, fp, indent=4, sort_keys=False)
 
     @classmethod
@@ -306,3 +311,48 @@ def has_kanji(s: str) -> bool:
         if code >= UNICODE_KANJI_START and code <= UNICODE_KANJI_END:
             return True
     return False
+
+def get_all_surface_readings(surface, furigana) -> List[str]:
+    """Find surface in furigana string and return its reading if possible
+    Args:
+        surface (str): surface
+        furigana (str): string with furigana in {<text>/<furi>} form
+
+    Returns:
+        List[str]: return readings
+    """
+    matches = re.compile(r"\{" + r"(\/([^\}]+)\}\{)?".join([char for char in surface])+r"(\/([^\}]+)\})").findall(furigana)
+    return [''.join(match[i] for i in range(1, len(match), 2) if match[i]) for match in matches]
+
+def find_all_substrings(main_string, substrings):
+    substrings = sorted(substrings, key=len, reverse=True) #sort by length from the longest to match longer strings first
+    pattern = '|'.join(map(re.escape, substrings))
+    matches = [(match.start(), match.group()) for match in re.finditer(pattern, main_string)]
+    matches.sort(key=lambda x: x[0])
+    return dict(matches)
+
+def get_furis(furigana) -> Dict[int, tuple]:
+    pattern = re.compile(r"\{([^\/\{\}]+)\/([^\/\{\}]+)\}")
+    offset = 0
+    furis = dict()
+    for match in pattern.finditer(furigana):
+        start = match.start()
+        group1 = match.group(1)
+        group2 = match.group(2)
+        start -= offset
+        offset += len(group2) + 3
+        furis[start] = (group1, group2)
+    return furis
+
+def get_reading_from_furi(start, length, furis) -> str:
+    reading = ""
+    while length > 0:
+        if start not in furis:
+            return None
+        reading += furis[start][1]
+        surface_len = len(furis[start][0])
+        start += surface_len
+        length -= surface_len
+        if length == 0:
+            return reading
+    return None

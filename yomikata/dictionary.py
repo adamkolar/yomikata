@@ -13,6 +13,7 @@ from speach.ttlig import RubyFrag, RubyToken
 from yomikata import utils
 from yomikata.config.config import ASCII_SPACE_TOKEN
 from yomikata.reader import Reader
+import re
 
 
 class Dictionary(Reader):
@@ -84,41 +85,39 @@ class Dictionary(Reader):
         text = utils.standardize_text(text)
         text = text.replace(" ", ASCII_SPACE_TOKEN)
         rubytoken = utils.parse_furigana(text)
+        without_furigana = utils.remove_furigana(text)
         output = ""
 
-        for group in rubytoken.groups:
-            if isinstance(group, ttlig.RubyFrag):
-                output += f"{{{group.text}/{group.furi}}}"
+        ruby_idx = 0
+        location = 0
+        ruby_location = 0
+
+        for word in self.tagger(without_furigana):
+            kana = self.token_to_kana(word)
+            surface = self.token_to_surface(word)
+            pos = self.token_to_pos(word)
+
+            while ruby_idx < len(rubytoken.groups):
+                r_token = rubytoken.groups[ruby_idx]
+                r_len = len(r_token.text if isinstance(r_token, ttlig.RubyFrag) else r_token)
+                if ruby_location + r_len > location:
+                    break
+                ruby_idx += 1
+                ruby_location += r_len
+
+            if surface == kana or pos in ["記号", "補助記号", "特殊"]:
+                output += surface
             else:
-                group = group.replace("{", "").replace("}", "")
-                for word in self.tagger(group):
-                    kana = self.token_to_kana(word)
-                    surface = self.token_to_surface(word)
-                    pos = self.token_to_pos(word)
-                    if (surface == kana) or pos in ["記号", "補助記号", "特殊"]:
-                        output += surface
-                    else:
-                        output += Dictionary.furi_to_ruby(surface, kana).to_code()
+                if isinstance(r_token, ttlig.RubyFrag) and r_token.text == surface:
+                    kana = r_token.furi
+                output += Dictionary.furi_to_ruby(surface, kana).to_code()
+            location += len(surface)
+
         output = output.replace(ASCII_SPACE_TOKEN, " ")
         return output
 
     @staticmethod
     def furi_to_ruby(surface, kana):
-        """Combine a surface string and a kana string to a RubyToken object with furigana.
-
-        Args:
-            surface (str): Surface string
-            kana (str): Kana string
-
-        Returns:
-            RubyToken: RubyToken object with furigana
-
-        This code is modified from the version in the part of speach library: 
-        https://github.com/neocl/speach/
-        https://github.com/neocl/speach/blob/main/speach/ttlig.py
-        :copyright: (c) 2018 Le Tuan Anh <tuananh.ke@gmail.com>
-        :license: MIT
-        """
 
         def common_substring_from_right(string1, string2):
             i = -1  # start from the end of strings
@@ -128,84 +127,172 @@ class Dictionary(Reader):
                 i -= 1  # decrement i to move towards start
             return string1[i + 1 :] if i != -1 else ""  # return common substring
 
-        def assert_rubytoken_kana_match(ruby: RubyToken, kana: str) -> None:
-            assert (
-                "".join(
-                    [token.furi if isinstance(token, RubyFrag) else token for token in ruby.groups]
-                )
-                == kana
-            )
+        ruby = RubyToken(surface=surface)
 
-        original_kana = kana
+        final_text = ""
 
-        final_text = common_substring_from_right(surface, kana)
+        match = re.search(r'\([ぁ-んァ-ンー]*\)$', surface)
+        if match:
+            final_text = match.group()
+            if len(final_text) == len(surface):
+                if kana:
+                    ruby.append(RubyFrag(text=final_text, furi=kana))
+                else:
+                    ruby.append(final_text)
+                return ruby
+            surface = surface[: -len(final_text)]
+
+        final_text += common_substring_from_right(surface, kana)
 
         if final_text:
             surface = surface[: -len(final_text)]
             kana = kana[: -len(final_text)]
 
-        ruby = RubyToken(surface=surface)
-        if deko.is_kana(surface):
-            ruby.append(surface)
-            if final_text:
-                ruby.append(final_text)
-            assert_rubytoken_kana_match(ruby, original_kana)
-            return ruby
-
         edit_seq = ndiff(surface, kana)
         kanji = ""
-        text = ""
         furi = ""
-        before = ""
-        expected = ""
+        text = ""
         for item in edit_seq:
             if item.startswith("- "):
-                # flush text if needed
-                if expected and kanji and furi:
-                    ruby.append(RubyFrag(text=kanji, furi=furi))
-                    kanji = ""
-                    furi = ""
-                    print(ruby)
                 if text:
                     ruby.append(text)
                     text = ""
                 kanji += item[2:]
             elif item.startswith("+ "):
-                if expected and item[2:] == expected:
-                    if expected and kanji and furi:
-                        ruby.append(RubyFrag(text=kanji, furi=furi))
-                        kanji = ""
-                        furi = ""
-                    ruby.append(item[2:])
-                    expected = ""
-                else:
-                    furi += item[2:]
+                if text:
+                    ruby.append(text)
+                    text = ""
+                furi += item[2:]
             elif item.startswith("  "):
-                if before == "-" and not furi:
-                    # shifting happened
-                    expected = item[2:]
-                    furi += item[2:]
-                else:
-                    text += item[2:]
-                    # flush if possible
-                    if kanji and furi:
+                if kanji or furi:
+                    # if kanji == "":
+                    #     print(surface, kana, furi, "uh oh 12", textt)
+                    if deko.is_kana(kanji) or furi == "":
+                        ruby.append(kanji)
+                    elif kanji:
                         ruby.append(RubyFrag(text=kanji, furi=furi))
-                        kanji = ""
-                        furi = ""
-                    else:
-                        # possible error?
-                        pass
-            before = item[0]  # end for
-        if kanji:
-            if furi:
-                ruby.append(RubyFrag(text=kanji, furi=furi))
-            else:
-                ruby.append(kanji)
-        elif text:
+                    kanji = ""
+                    furi = ""
+                text += item[2:]
+        if text:
             ruby.append(text)
-
+        if kanji or furi:
+            # if kanji == "":
+            #     print(surface, kana, furi, "uh oh")
+            if deko.is_kana(kanji) or furi == "":
+                ruby.append(kanji)
+            elif kanji:
+                ruby.append(RubyFrag(text=kanji, furi=furi))
         if final_text:
             ruby.append(final_text)
 
-        assert_rubytoken_kana_match(ruby, original_kana)
         return ruby
+
+    # @staticmethod
+    # def furi_to_ruby(surface, kana):
+    #     print(surface)
+    #     print(kana)
+    #     """Combine a surface string and a kana string to a RubyToken object with furigana.
+
+    #     Args:
+    #         surface (str): Surface string
+    #         kana (str): Kana string
+
+    #     Returns:
+    #         RubyToken: RubyToken object with furigana
+
+    #     This code is modified from the version in the part of speach library: 
+    #     https://github.com/neocl/speach/
+    #     https://github.com/neocl/speach/blob/main/speach/ttlig.py
+    #     :copyright: (c) 2018 Le Tuan Anh <tuananh.ke@gmail.com>
+    #     :license: MIT
+    #     """
+
+    #     def common_substring_from_right(string1, string2):
+    #         i = -1  # start from the end of strings
+    #         while -i <= min(len(string1), len(string2)):
+    #             if string1[i] != string2[i]:  # if characters don't match, break
+    #                 break
+    #             i -= 1  # decrement i to move towards start
+    #         return string1[i + 1 :] if i != -1 else ""  # return common substring
+
+    #     def assert_rubytoken_kana_match(ruby: RubyToken, kana: str) -> None:
+    #         token_text = "".join([token.furi if isinstance(token, RubyFrag) else token for token in ruby.groups])
+    #         token_text = jaconv.kata2hira(token_text).replace("・", "").replace("-", "")
+    #         print(token_text)
+    #         print(kana)
+    #         assert (token_text == kana)
+
+    #     original_kana = kana
+
+    #     final_text = common_substring_from_right(surface, kana)
+
+    #     if final_text:
+    #         surface = surface[: -len(final_text)]
+    #         kana = kana[: -len(final_text)]
+
+    #     ruby = RubyToken(surface=surface)
+    #     if deko.is_kana(surface):
+    #         ruby.append(surface)
+    #         if final_text:
+    #             ruby.append(final_text)
+    #         # assert_rubytoken_kana_match(ruby, original_kana)
+    #         return ruby
+
+    #     edit_seq = ndiff(surface, kana)
+    #     kanji = ""
+    #     text = ""
+    #     furi = ""
+    #     before = ""
+    #     expected = ""
+    #     for item in edit_seq:
+    #         if item.startswith("- "):
+    #             # flush text if needed
+    #             if expected and kanji and furi:
+    #                 ruby.append(RubyFrag(text=kanji, furi=furi))
+    #                 kanji = ""
+    #                 furi = ""
+    #                 print(ruby)
+    #             if text:
+    #                 ruby.append(text)
+    #                 text = ""
+    #             kanji += item[2:]
+    #         elif item.startswith("+ "):
+    #             if expected and item[2:] == expected:
+    #                 if expected and kanji and furi:
+    #                     ruby.append(RubyFrag(text=kanji, furi=furi))
+    #                     kanji = ""
+    #                     furi = ""
+    #                 ruby.append(item[2:])
+    #                 expected = ""
+    #             else:
+    #                 furi += item[2:]
+    #         elif item.startswith("  "):
+    #             if before == "-" and not furi:
+    #                 # shifting happened
+    #                 expected = item[2:]
+    #                 furi += item[2:]
+    #             else:
+    #                 text += item[2:]
+    #                 # flush if possible
+    #                 if kanji and furi:
+    #                     ruby.append(RubyFrag(text=kanji, furi=furi))
+    #                     kanji = ""
+    #                     furi = ""
+    #                 else:
+    #                     # possible error?
+    #                     pass
+    #         before = item[0]  # end for
+    #     if kanji:
+    #         if furi:
+    #             ruby.append(RubyFrag(text=kanji, furi=furi))
+    #         else:
+    #             ruby.append(kanji)
+    #     elif text:
+    #         ruby.append(text)
+
+    #     if final_text:
+    #         ruby.append(final_text)
+
+    #     # assert_rubytoken_kana_match(ruby, original_kana)
+    #     return ruby

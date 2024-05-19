@@ -7,7 +7,8 @@ from speach.ttlig import RubyFrag, RubyToken
 from yomikata import utils
 from yomikata.config import config, logger
 from yomikata.dictionary import Dictionary
-
+import re
+from tqdm import tqdm
 
 def train_val_test_split(X, y, train_size, val_size, test_size):
     """Split dataset into data splits."""
@@ -158,21 +159,39 @@ def optimize_furigana(input_file, output_file, heteronym_dict, dictionary) -> No
 def remove_other_readings(input_file, output_file, heteronym_dict):
     df = pd.read_csv(input_file)  # load
     logger.info(f"Prefilter size: {len(df)}")
-    df["keep_row"] = False
-    for heteronym in heteronym_dict.keys():
-        logger.info(heteronym)
-        n_with_het = sum(df["sentence"].str.contains(heteronym))
-        keep_for_het = df["furigana"].str.contains(
-            r"|".join([f"{{{heteronym}/{reading}}}" for reading in heteronym_dict[heteronym]])
-        )
-        df["keep_row"] = df["keep_row"] | keep_for_het
-        logger.info(
-            f"Dropped {n_with_het-sum(keep_for_het)}/{n_with_het} sentences which have different readings"
-        )  # TODO reword
-    df = df.loc[df["keep_row"]]
-    df = df.drop("keep_row", axis=1)
-    df.to_csv(output_file, index=False)
+    all_keep_indices = set()  # Set to store indices for all heteronyms
 
+    for heteronym in tqdm(heteronym_dict.keys(), desc="Processing heteronyms"):
+        logger.info(heteronym)
+        current_keep_indices = set()  # Set to store indices for the current heteronym
+        relevant_rows = df["sentence"].str.contains(heteronym)
+        df_filtered = df.loc[relevant_rows]
+        n_with_het = sum(relevant_rows)
+        for index, row in df_filtered.iterrows():
+            readings = utils.get_all_surface_readings(heteronym, row["furigana"])
+            for reading in readings:
+                if reading in heteronym_dict[heteronym]:
+                    current_keep_indices.add(index)
+                    break
+        all_keep_indices.update(current_keep_indices)  # Merge current indices with all indices
+        logger.info(f"Kept {len(current_keep_indices)}/{n_with_het} sentences for heteronym '{heteronym}'")
+
+    # Filter the DataFrame using the set of all indices
+    df = df.loc[list(all_keep_indices)]
+    df.to_csv(output_file, index=False)
+    logger.info(f"Postfilter size: {len(df)}")
+
+pattern = re.compile(r'\{[^/]{2,}\/[^}]{2,}\}')
+
+def replace_furigana(text, dictionary):
+    return pattern.sub(lambda match: dictionary.get(match.group(0), match.group(0)), text)
+
+def decompose_furigana(input_file, output_file, translation_dictionary):
+    logger.info("Reading the input file")
+    df = pd.read_csv(input_file)
+    df['furigana'] = [replace_furigana(sentence, translation_dictionary) for sentence in tqdm(df['furigana'], desc="Processing")]
+    logger.info("Writing the output file")
+    df.to_csv(output_file, index=False)
 
 def check_data(input_file) -> bool:
     df = pd.read_csv(input_file)  # load
@@ -180,9 +199,7 @@ def check_data(input_file) -> bool:
     assert df["furigana-test"].all()
     df["sentence-standardize-test"] = df["sentence"] == df["sentence"].apply(utils.standardize_text)
     assert df["sentence-standardize-test"].all()
-
     return True
-
 
 def split_data(data_file) -> None:
     df = pd.read_csv(data_file)  # load
@@ -208,6 +225,7 @@ def split_data(data_file) -> None:
 
 
 if __name__ == "__main__":
+
     input_files = [
         Path(config.SENTENCE_DATA_DIR, "aozora.csv"),
         Path(config.SENTENCE_DATA_DIR, "kwdlc.csv"),
@@ -218,32 +236,24 @@ if __name__ == "__main__":
     logger.info("Merging sentence data")
     utils.merge_csvs(input_files, Path(config.SENTENCE_DATA_DIR, "all.csv"), n_header=1)
 
+    split_dict = utils.load_dict(Path(config.CONFIG_DIR, "translations.json"))
+    logger.info("Splitting furigana")
+    decompose_furigana(
+        Path(config.SENTENCE_DATA_DIR, "all.csv"),
+        Path(config.SENTENCE_DATA_DIR, "all_broken_down.csv"),
+        split_dict,
+    )
+
     logger.info("Rough filtering for sentences with heteronyms")
     filter_simple(
-        Path(config.SENTENCE_DATA_DIR, "all.csv"),
+        Path(config.SENTENCE_DATA_DIR, "all_broken_down.csv"),
         Path(config.SENTENCE_DATA_DIR, "have_heteronyms_simple.csv"),
         config.HETERONYMS.keys(),
-    )
-
-    logger.info("Sudachidict filtering for out heteronyms in known compounds")
-    filter_dictionary(
-        Path(config.SENTENCE_DATA_DIR, "have_heteronyms_simple.csv"),
-        Path(config.SENTENCE_DATA_DIR, "have_heteronyms.csv"),
-        config.HETERONYMS.keys(),
-        Dictionary("sudachi"),
-    )
-
-    logger.info("Optimizing furigana")
-    optimize_furigana(
-        Path(config.SENTENCE_DATA_DIR, "have_heteronyms.csv"),
-        Path(config.SENTENCE_DATA_DIR, "optimized_heteronyms.csv"),
-        config.HETERONYMS,
-        Dictionary("sudachi"),
     )
 
     logger.info("Removing heteronyms with unexpected readings")
     remove_other_readings(
-        Path(config.SENTENCE_DATA_DIR, "optimized_heteronyms.csv"),
+        Path(config.SENTENCE_DATA_DIR, "have_heteronyms_simple.csv"),
         Path(config.SENTENCE_DATA_DIR, "optimized_strict_heteronyms.csv"),
         config.HETERONYMS,
     )

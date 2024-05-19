@@ -18,6 +18,7 @@ DATA_DIR = Path(BASE_DIR, "data")
 RAW_DATA_DIR = Path(DATA_DIR, "raw")
 SENTENCE_DATA_DIR = Path(DATA_DIR, "sentence_data")
 READING_DATA_DIR = Path(DATA_DIR, "reading_data")
+BREAKDOWN_DATA_DIR = Path(DATA_DIR, "breakdown_data")
 
 TRAIN_DATA_DIR = Path(SENTENCE_DATA_DIR, "train")
 VAL_DATA_DIR = Path(SENTENCE_DATA_DIR, "val")
