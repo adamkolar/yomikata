@@ -49,7 +49,7 @@ def generate_breakdown_dictionary():
     logger.info("✅ Saved translation dictionary for decomposing furigana into " + str(dict_path) + "!")
     # utils.save_dict(without_translation, Path(config.BREAKDOWN_DATA_DIR, "no_translations.json"))
 
-def sentence_list_to_breakdown_dictionary(sentences) -> tuple[dict, dict]:
+def sentence_list_to_breakdown_dictionary(sentences) -> dict:
     # pattern = re.compile(r"\{(.*?)/(.*?)\}")
     pattern = re.compile(r"\{((?:[^/\}]|\{[^/\}]*\})*?)/([^/\}]*?[\u3040-\u309F\u30A0-\u30FF][^/\}]*?)\}")
     counter = Counter()
