@@ -156,10 +156,6 @@ class dBert(Reader):
 
     def train(self, dataset, training_args={}) -> dict:
 
-        fraction = 0.001
-        if fraction < 1:
-            dataset = dataset.filter(lambda _: random.random() < fraction)
-
         dataset = dataset.map(
             self.batch_preprocess_function, batched=True, fn_kwargs={"pad": False}
         )
