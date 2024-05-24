@@ -181,7 +181,7 @@ def remove_other_readings(input_file, output_file, heteronym_dict):
     df.to_csv(output_file, index=False)
     logger.info(f"Postfilter size: {len(df)}")
 
-pattern = re.compile(r'\{[^/]{2,}\/[^}]{2,}\}')
+pattern = re.compile(r'\{[^/]{1,}\/[^}]{1,}\}')
 
 def replace_furigana(text, dictionary):
     return pattern.sub(lambda match: dictionary.get(match.group(0), match.group(0)), text)

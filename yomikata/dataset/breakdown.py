@@ -9,9 +9,9 @@ import gc
 import os
 
 memo = {}
+
 def find_combinations(surface, reading, df_grouped):
     if (surface, reading) not in memo:
-        # print(surface, reading)
         memo[(surface, reading)] = []
         for i in range(len(surface)):
             for record in df_grouped.get(surface[:i+1], []):
@@ -19,12 +19,12 @@ def find_combinations(surface, reading, df_grouped):
                 if candidate_length <= len(reading):
                     new_reading = reading[0]
                     for ii in range(1, candidate_length):
-                        new_reading += record['reading'][ii] if reading[ii] == 'ー' else reading[ii]
-                    # if new_reading.startswith(record['reading']):
+                        new_reading += record['reading'][ii] if reading[ii] == 'ー' and record['reading'][ii] in {'あ', 'い', 'う', 'え', 'お'} else reading[ii]
                     if new_reading == record['reading'] and record['reading'] != reading:
                         remaining_surface = surface[i+1:]
                         remaining_reading = reading[candidate_length:]
-                        record_tuple = [(surface[:i+1] + '/' + record['reading'], record['count'])]
+                        count = record['count'] if 'ー' not in record['reading'] else 0 # give penalty to variants containing 'ー', we prefer readings without 'ー'
+                        record_tuple = [(surface[:i+1] + '/' + record['reading'], count)]
                         if len(remaining_surface) == 0 and len(remaining_reading) == 0:
                             memo[(surface, reading)].append(record_tuple)
                         elif len(remaining_surface) != 0 and len(remaining_reading) != 0:
@@ -37,20 +37,18 @@ def find_combinations(surface, reading, df_grouped):
     return memo[(surface, reading)]
 
 def generate_breakdown_dictionary():
-    all_sentences_df = pd.read_csv(Path(config.SENTENCE_DATA_DIR, "all.csv"))
+    all_sentences_df = pd.read_csv(Path(config.SENTENCE_DATA_DIR, "all_filtered.csv"))
     sentences = all_sentences_df["furigana"].tolist()
     del all_sentences_df
-    # (translations, without_translation) = sentence_list_to_breakdown_dictionary(sentences)
-    translations = sentence_list_to_breakdown_dictionary(sentences)
+    (translations, without_translation) = sentence_list_to_breakdown_dictionary(sentences)
     if not os.path.exists(config.BREAKDOWN_DATA_DIR):
         os.makedirs(config.BREAKDOWN_DATA_DIR)
     dict_path = Path(config.BREAKDOWN_DATA_DIR, "translations.json")
     utils.save_dict(translations, dict_path)
     logger.info("✅ Saved translation dictionary for decomposing furigana into " + str(dict_path) + "!")
-    # utils.save_dict(without_translation, Path(config.BREAKDOWN_DATA_DIR, "no_translations.json"))
+    utils.save_dict(without_translation, Path(config.BREAKDOWN_DATA_DIR, "no_translations.json"))
 
 def sentence_list_to_breakdown_dictionary(sentences) -> dict:
-    # pattern = re.compile(r"\{(.*?)/(.*?)\}")
     pattern = re.compile(r"\{((?:[^/\}]|\{[^/\}]*\})*?)/([^/\}]*?[\u3040-\u309F\u30A0-\u30FF][^/\}]*?)\}")
     counter = Counter()
     for sentence in tqdm(sentences, desc="Compiling furigana"):
@@ -69,16 +67,50 @@ def sentence_list_to_breakdown_dictionary(sentences) -> dict:
         if kana not in df_grouped:
             df_grouped[kana] = []
         df_grouped[kana].append({'reading': reading, 'count': count})
-    del counter
     gc.collect()
 
+    for row in tqdm(in_corpus, desc="First pass to get implicit furigana fragments"):
+        surface = row[0]
+        reading = row[1]
+        if len(surface) > 0:
+            max_len = 0
+            max_score = 0
+            longest_combinations = []
+            best_combination = None
+            combinations = find_combinations(surface, reading, df_grouped)
+            for combination in combinations:
+                lenght = len(combination)
+                if lenght > max_len:
+                    max_len = lenght
+                    max_score = 0
+                if lenght == max_len:
+                    score = 0
+                    for furigana in combination:
+                        score += furigana[1]
+                    if score > max_score:
+                        max_score = score
+                        best_combination = combination
+            if best_combination != None:
+                for furigana in best_combination:
+                    split_string = furigana[0].split("/")
+                    counter.update([(split_string[0], split_string[1])])
+    global memo
+    memo = {}
+
+    df_grouped = dict()
+    for (kana, reading), count in tqdm(counter.items(), desc="Building furigana dictionary"):
+        if kana not in df_grouped:
+            df_grouped[kana] = []
+        df_grouped[kana].append({'reading': reading, 'count': count})
+    del counter
+
     translations = dict()
-    # without_translation = dict()
+    without_translation = dict()
 
     for row in tqdm(in_corpus, desc="Breaking down furigana"):
         surface = row[0]
         reading = row[1]
-        if len(surface) > 1:
+        if len(surface) > 0:
             max_len = 0
             max_score = 0
             longest_combinations = []
@@ -101,11 +133,10 @@ def sentence_list_to_breakdown_dictionary(sentences) -> dict:
                 translations[key] = ""
                 for furigana in best_combination:
                     translations[key] += "{"+furigana[0]+"}"
-            # else:
-            #     without_translation[key] = ""
+            else:
+                without_translation[key] = ""
 
-    # return (translations, without_translation)
-    return translations
+    return (translations, without_translation)
 
 if __name__ == "__main__":
     generate_breakdown_dictionary()

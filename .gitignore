@@ -9,6 +9,7 @@ papers
 ignore
 yomikata/*-artifacts
 yomikata/*.tar.gz
+notebooks/mlruns
 
 # Binaries
 *.bin 
