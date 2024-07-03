@@ -230,6 +230,25 @@ def standardize_text(s: str) -> str:
 
     return s.strip()
 
+def strip_dot_pattern(input_string: str) -> str:
+    return re.sub(r'\..*', '', input_string)
+
+def strip_hyphens(input_string: str) -> str:
+    return input_string.strip('-')
+
+def get_accented_versions(input_string: str) -> str:
+    hiragana_accent_mapping = {
+        'か': 'が', 'き': 'ぎ', 'く': 'ぐ', 'け': 'げ', 'こ': 'ご',
+        'さ': 'ざ', 'し': 'じ', 'す': 'ず', 'せ': 'ぜ', 'そ': 'ぞ',
+        'た': 'だ', 'ち': 'ぢ', 'つ': 'づ', 'て': 'で', 'と': 'ど',
+        'は': ['ば', 'ば'], 'ひ': ['び', 'ぴ'], 'ふ': ['ぶ', 'ぷ'], 
+        'へ': ['べ', 'ぺ'], 'ほ': ['ぼ', 'ぽ']
+    }
+    output = []
+    if len(input_string) > 0 and input_string[0] in hiragana_accent_mapping:
+        for char in hiragana_accent_mapping[input_string[0]]:
+            output.append(char + input_string[1:])
+    return output
 
 FURIMAP = re.compile(
     r"\{(?P<text>[^{}]+?)/(?P<furi>[\w%％]+?)\}"
