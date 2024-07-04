@@ -108,9 +108,12 @@ class Dictionary(Reader):
             if surface == kana or pos in ["記号", "補助記号", "特殊"]:
                 output += surface
             else:
-                if isinstance(r_token, ttlig.RubyFrag) and r_token.text == surface:
-                    kana = r_token.furi
-                output += Dictionary.furi_to_ruby(surface, kana).to_code()
+                dict_ruby = Dictionary.furi_to_ruby(surface, kana)
+                if isinstance(r_token, ttlig.RubyFrag):
+                    for ruby_group in dict_ruby.groups:
+                        if isinstance(ruby_group, ttlig.RubyFrag) and r_token.text == ruby_group.text:
+                            ruby_group.furi = r_token.furi
+                output += dict_ruby.to_code()
             location += len(surface)
 
         output = output.replace(ASCII_SPACE_TOKEN, " ")
